@@ -36,7 +36,14 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
 ```
+
+Put local credentials in `transcription_pipeline/.env`. The checked-in
+`.env.example` is only a template; `.env` is ignored by Git and must never be
+committed. Settings from the shell take precedence over values in the file.
+`OPENAI_API_KEY` and `HF_TOKEN` are optional; leave their example lines
+commented unless you need those providers.
 
 Start the API in the first terminal:
 
@@ -75,14 +82,8 @@ without evaluating them first.
 ## Optional text-only correction
 
 Local transcription and the UI work without an LLM account or API key. To enable
-the optional correction checkbox, set a key only in the API terminal before
-starting FastAPI:
-
-```powershell
-$env:OPENAI_API_KEY = "your-key"
-$env:OPENAI_TEXT_MODEL = "gpt-5-nano"
-python -m uvicorn service:app --host 127.0.0.1 --port 8000
-```
+the optional correction checkbox, uncomment `OPENAI_API_KEY` in `.env`, add your
+key, and restart FastAPI:
 
 Never commit the key or put it in Streamlit code. The correction step is
 text-only, opt-in per request, and asks for conservative spelling, punctuation,
@@ -96,6 +97,11 @@ this was documented. A 15,000-token input and 15,000-token output would be about
 $0.00675; actual usage varies by transcript and edits. Prices and account
 availability change. See [OpenAI API pricing](https://developers.openai.com/api/docs/pricing).
 No LLM call happens unless correction is configured and selected.
+
+Public Hugging Face Whisper models download without a token. If you later choose
+a private or gated Hugging Face model, create a read-only token and set
+`HF_TOKEN` in `.env`; `huggingface_hub` reads this standard environment
+variable. Never put either token in Python source, Streamlit settings, or Git.
 
 ## Run and test
 

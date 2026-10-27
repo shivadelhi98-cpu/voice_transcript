@@ -12,6 +12,10 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, Response
 
 from correction import OpenAITextCorrector, TextCorrector, apply_correction
+from settings import load_settings
+
+load_settings()
+
 from pipeline import (
     MAX_BYTES,
     SUPPORTED_EXT,

@@ -7,6 +7,10 @@ import os
 import requests
 import streamlit as st
 
+from settings import load_settings
+
+load_settings()
+
 API_URL = os.getenv("TRANSCRIPTION_API_URL", "http://127.0.0.1:8000").rstrip("/")
 
 

@@ -18,6 +18,10 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Protocol
 
+from settings import load_settings
+
+load_settings()
+
 log = logging.getLogger("pipeline")
 
 SUPPORTED_EXT = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm", ".mp4"}
