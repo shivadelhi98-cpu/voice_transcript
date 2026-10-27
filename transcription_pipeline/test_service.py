@@ -5,7 +5,7 @@ import wave
 
 from fastapi.testclient import TestClient
 
-from pipeline import MockBackend
+from pipeline import FasterWhisperBackend, FallbackBackend, MockBackend
 from service import create_app
 
 
@@ -54,6 +54,15 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertFalse(result["text_correction_available"])
         self.assertEqual(result["asr_mode"], "mock")
+
+    def test_health_reports_local_fallback_order(self):
+        backend = FallbackBackend([FasterWhisperBackend("small"), FasterWhisperBackend("base")])
+        client = TestClient(create_app(backend, normalize=False))
+
+        result = client.get("/health").json()
+
+        self.assertEqual(result["asr_mode"], "local")
+        self.assertEqual(result["asr_models"], ["small", "base"])
 
     def test_wav_upload_json(self):
         response = self.post(self.client, wav_bytes(), "meeting.wav")
