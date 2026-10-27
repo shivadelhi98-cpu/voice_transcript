@@ -1,91 +1,141 @@
-# Transcription Pipeline
+# Local Voice Transcript
 
-Audio file(s) -> clean transcript -> structured output (JSON, SRT) with keywords, summary and action items.
+Upload an audio recording, transcribe it locally with a pretrained Hugging Face
+Whisper model, and get a cleaned transcript with timestamps, keywords, a short
+summary, action items, and JSON/SRT downloads.
 
-## Quick start (Windows PowerShell)
+Audio stays on your machine for transcription. Optional LLM correction is
+disabled by default; when enabled, only transcript text (never the audio) is sent
+to the configured text model. The raw local transcript is preserved.
 
-Run these commands from the `transcription_pipeline` folder:
+## Architecture
+
+```text
+Streamlit UI
+    -> FastAPI upload /transcribe
+        -> local audio validation and FFmpeg normalization
+        -> faster-whisper model downloaded from Hugging Face and run locally
+        -> cleanup, timestamps, keywords, summary, action items
+        -> optional text-only correction (OpenAI API; disabled unless configured)
+    <- JSON transcript
+    -> JSON and SRT downloads
+```
+
+FastAPI keeps the UI separate from transcription. The ASR backend is replaceable;
+optional local ASR fallbacks are tried in order. Cloud ASR is not configured and
+audio is never silently sent to a cloud transcription service. If correction is
+unavailable or fails, the app keeps the original transcript and reports a warning.
+
+## Windows setup
+
+Install Python and [FFmpeg](https://ffmpeg.org/) first. Confirm `ffmpeg -version`
+works in a new PowerShell window, then open PowerShell in this project folder:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-python pipeline.py --mock
+```
+
+Start the API in the first terminal:
+
+```powershell
+python -m uvicorn service:app --host 127.0.0.1 --port 8000
+```
+
+Start the UI in a second terminal:
+
+```powershell
+cd C:\path\to\voice_transcript\transcription_pipeline
+.\.venv\Scripts\Activate.ps1
+python -m streamlit run app.py
+```
+
+Open the Streamlit URL it prints (normally <http://localhost:8501>). FastAPI's
+interactive API docs are at <http://127.0.0.1:8000/docs>.
+
+The default ASR model is `small`, a multilingual model downloaded from Hugging
+Face the first time it is used. Change model and fallbacks in the API terminal
+before starting FastAPI:
+
+```powershell
+$env:WHISPER_MODEL = "small"
+$env:WHISPER_FALLBACK_MODELS = "base"
+python -m uvicorn service:app --host 127.0.0.1 --port 8000
+```
+
+Model fallbacks are local and tried only if the previous model errors. They use
+additional disk space and may download extra weights. Pick models that fit the
+machine and benchmark them on representative recordings before production use.
+`large-v3-turbo` is another multilingual candidate; English-only Distil-Whisper
+models should not be selected for Hindi or mixed Hindi-English recordings
+without evaluating them first.
+
+## Optional text-only correction
+
+Local transcription and the UI work without an LLM account or API key. To enable
+the optional correction checkbox, set a key only in the API terminal before
+starting FastAPI:
+
+```powershell
+$env:OPENAI_API_KEY = "your-key"
+$env:OPENAI_TEXT_MODEL = "gpt-5-nano"
+python -m uvicorn service:app --host 127.0.0.1 --port 8000
+```
+
+Never commit the key or put it in Streamlit code. The correction step is
+text-only, opt-in per request, and asks for conservative spelling, punctuation,
+and grammar edits without changing facts or segment timestamps. The app keeps
+the raw local transcript alongside any corrected text. Review corrections,
+especially for names, numbers, dates, and code-switched speech.
+
+As an example of the cost scale, the published OpenAI API price for GPT-5 nano
+is $0.05 per million input tokens and $0.40 per million output tokens at the time
+this was documented. A 15,000-token input and 15,000-token output would be about
+$0.00675; actual usage varies by transcript and edits. Prices and account
+availability change. See [OpenAI API pricing](https://developers.openai.com/api/docs/pricing).
+No LLM call happens unless correction is configured and selected.
+
+## Run and test
+
+```powershell
 python -m unittest discover -s . -p "test_*.py" -v
 ```
 
-The mock command needs neither a model nor audio. For real audio, install
-[FFmpeg](https://ffmpeg.org/) and make sure `ffmpeg` is on `PATH`, then run:
-
-```powershell
-python pipeline.py .\recordings -o .\out --model small
-```
-
-The pipeline writes one JSON and one SRT file per supported audio file. Supported
-formats are WAV, MP3, M4A, FLAC, OGG, WEBM, and MP4. The first real run downloads
-the selected faster-whisper model.
-
-To run the mock HTTP service:
+Run the API with deterministic sample output (no model download):
 
 ```powershell
 $env:STT_BACKEND = "mock"
-python service.py
+python -m uvicorn service:app --host 127.0.0.1 --port 8000
 ```
 
-For a real service, leave `STT_BACKEND` unset. Upload an audio file to
-`http://localhost:8000/transcribe` as multipart field `file`; add `?format=srt`
-for subtitles. `GET /health` reports service and FFmpeg status.
+Tests cover audio validation, local-backend fallback, correction validation and
+failure behavior, API request validation, and response formats. Mock tests do
+not measure speech recognition quality. Evaluate the ASR models using recordings
+you have permission to process and calculate WER/CER against verified transcripts.
 
-On macOS/Linux, replace the virtual-environment activation command with
-`source .venv/bin/activate` and use platform-appropriate paths.
+## API
 
-## Preparing for GitHub
+- `GET /health`: API, FFmpeg, and optional correction-provider readiness.
+- `POST /transcribe`: multipart `file`; optional `format=json|srt` and
+  `correct=true|false` form fields.
 
-Create the Git repository in this `transcription_pipeline` folder. Do not upload
-`.venv`, generated `out` files, or private recordings. A `.gitignore` is included.
-The project brief, engineering decisions, and known limitations are documented
-below for discussion during review.
+Typical errors are 400 for invalid options, 413 for an upload over 500 MB, 415
+for an unsupported extension, 422 for an unreadable file, and 503 when correction
+is requested but not configured.
 
-## Flow
-`validate -> ffmpeg to 16k mono wav -> transcribe (retry/backoff) -> clean -> enrich -> export`
+## Limitations and next steps
 
-## Engineering decisions
-| Decision | Why |
-|---|---|
-| **faster-whisper, local** | Open source, no per-minute cost, audio never leaves the machine (matters for call recordings/PII), int8 runs on CPU. |
-| **Backend behind a 1-method Protocol** | Swap in a hosted API or another model without touching the pipeline. Also makes tests fast and deterministic (MockBackend). |
-| **Normalize with ffmpeg first** | One code path for mp3/m4a/webm/etc.; also surfaces corrupt files early with a clear error. |
-| **Clean-up stage** | Raw ASR output is not "downstream ready": fillers, silence hallucinations, and Whisper's repeated-segment loops are removed; duplicates are merged rather than dropped so timestamps stay correct. |
-| **Confidence + no-speech filtering** | Cheap guard against garbage text from noise. Thresholds are configurable and drops are reported in `warnings`, not silent. |
-| **Retry only transient errors** | Exponential backoff for backend failures; validation errors fail fast. |
-| **Batch isolation** | One bad file is recorded in the report and the run continues; exit code is non-zero if any failed. |
-| **Segments with timestamps preserved** | Downstream consumers (subtitles, search-to-timestamp, speaker alignment) need them; flat text is derived. |
-| **Rule-based enrichment** | Keywords, extractive summary and action items are deterministic, free, and testable. Good enough to show the interface. |
-
-## Known limitations / what I'd do next
-- **No speaker diarization** (pyannote would be the next stage; the `Segment` model has room for a `speaker` field).
-- **Enrichment is heuristic.** In production I'd replace `summarize`/`action_items` with an LLM call using structured output, keeping the rule-based version as a fallback and for evals.
-- **Sequential processing.** For volume: a queue (SQS/Celery) with one model-loaded worker per GPU/core; the model is already loaded once per process.
-- **Very long audio** relies on faster-whisper's internal VAD/windowing; I'd add explicit chunking with overlap if memory became a problem.
-- **Quality measurement:** add a small labelled set and track WER per release; the mock-based tests only verify plumbing, not accuracy.
-- **Language:** auto-detected; no handling for code-switching (e.g. Hindi/English), where a larger model or forced language per chunk helps.
-- Cleanup regexes are English-only.
-
-## Review talking points
-
-- **What does it do?** Accepts audio files, normalizes them to 16 kHz mono WAV, transcribes them, cleans and enriches the transcript, then exports JSON and SRT with timestamps.
-- **Why faster-whisper?** It is an open-source local backend, so recordings do not need to be sent to a hosted transcription API. The trade-off is that users need FFmpeg, a compatible runtime, and a model download on first use.
-- **Why define an `STTBackend` protocol?** It keeps transcription separate from orchestration. A different model or a deterministic mock can be substituted without changing validation, cleanup, enrichment, or export.
-- **How are failures handled?** Invalid files fail validation immediately. Transient backend errors get bounded exponential retries. Batch processing records per-file failures and continues, while the command exits non-zero if any file failed.
-- **How is it tested?** Tests use the mock backend to check output shape, cleanup, retry behavior, batch isolation, silence handling, SRT formatting, and HTTP request validation. This verifies pipeline behavior, not recognition accuracy.
-- **What would you improve for production?** Measure word error rate against labeled recordings, add diarization and stronger language-aware cleanup, process long recordings asynchronously, and replace or evaluate heuristic enrichment against structured LLM output.
-
-## Service details
-
-The service returns JSON by default; use `?format=srt` for subtitles. Status
-codes are 400 for invalid requests, 413 for oversized uploads, 415 for
-unsupported types, 422 for unreadable audio, and 500 for unexpected failures.
-Client filenames are never used on disk, temporary files are always cleaned up,
-and a process handles one transcription at a time. For production scale-out,
-use multiple worker processes; for long recordings, move work to an async job
-queue instead of holding the request open.
+- ASR quality and latency depend on model size, recording quality, language,
+  and available hardware. The default has not been benchmarked against your own
+  speech data.
+- Whisper's multilingual capability is not a guarantee of accurate Hindi-English
+  code-switching. Keep raw transcripts and evaluate corrections before relying
+  on them.
+- Rule-based summaries and action items are heuristic, not verified facts.
+- The API currently handles each transcription in a synchronous worker thread.
+  Add job IDs and a queue if concurrent or lengthy production workloads require
+  background processing.
+- Review licenses and model terms for the selected Hugging Face checkpoint and
+  dependencies before commercial deployment.

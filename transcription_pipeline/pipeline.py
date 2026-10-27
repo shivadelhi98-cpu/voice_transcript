@@ -41,6 +41,8 @@ class Transcript:
     segments: list[Segment]
     enrichment: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    raw_text: str | None = None
+    correction_applied: bool = False
 
     @property
     def text(self) -> str:
@@ -74,6 +76,25 @@ class FasterWhisperBackend:
             # avg_logprob is a log-prob; exp() gives a rough 0..1 confidence
             segs.append(Segment(s.start, s.end, s.text.strip(), round(2.718281828 ** s.avg_logprob, 3)))
         return segs, info.language, info.duration
+
+
+class FallbackBackend:
+    """Try local ASR backends in order; never sends audio to a hosted service."""
+
+    def __init__(self, backends: list[STTBackend]):
+        if not backends:
+            raise ValueError("at least one ASR backend is required")
+        self.backends = backends
+
+    def transcribe(self, wav_path):
+        failures = []
+        for backend in self.backends:
+            try:
+                return backend.transcribe(wav_path)
+            except Exception as error:
+                failures.append(f"{type(backend).__name__}: {error}")
+                log.warning("ASR backend %s failed: %s", type(backend).__name__, error)
+        raise RuntimeError("all local ASR backends failed: " + "; ".join(failures))
 
 
 class MockBackend:

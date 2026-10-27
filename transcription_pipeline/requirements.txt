@@ -1,3 +1,8 @@
-Flask>=3.0,<4.0
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.34,<1.0
+python-multipart>=0.0.20,<1.0
+streamlit>=1.42,<2.0
+requests>=2.32,<3.0
 faster-whisper>=1.0,<2.0
 av>=18.1,<19
+openai>=1.68,<3.0

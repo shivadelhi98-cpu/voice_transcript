@@ -25,6 +25,18 @@ class Tests(unittest.TestCase):
         with self.assertRaises(PipelineError):
             transcribe_with_retry(MockBackend(fail_times=9), Path("x"), retries=1, base_delay=0)
 
+    def test_local_backend_fallback(self):
+        class BrokenBackend:
+            def transcribe(self, wav_path):
+                raise RuntimeError("model unavailable")
+
+        fallback = FallbackBackend([BrokenBackend(), MockBackend()])
+        segments, language, duration = fallback.transcribe(Path("x"))
+
+        self.assertEqual(language, "en")
+        self.assertEqual(duration, 20.0)
+        self.assertTrue(segments)
+
     def test_validation(self):
         with self.assertRaises(PipelineError): validate(Path("nope.wav"))
         with self.assertRaises(PipelineError): validate(fake_audio(".txt"))

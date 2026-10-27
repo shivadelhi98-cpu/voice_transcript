@@ -1,48 +1,110 @@
-import io, struct, unittest, wave
+import io
+import struct
+import unittest
+import wave
+
+from fastapi.testclient import TestClient
+
 from pipeline import MockBackend
 from service import create_app
 
 
 def wav_bytes(seconds=1, rate=16000) -> bytes:
     buf = io.BytesIO()
-    with wave.open(buf, "wb") as w:
-        w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate)
-        w.writeframes(struct.pack("<h", 0) * rate * seconds)
+    with wave.open(buf, "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(rate)
+        audio.writeframes(struct.pack("<h", 0) * rate * seconds)
     return buf.getvalue()
 
 
-class ServiceTests(unittest.TestCase):
-    def setUp(self):
-        self.c = create_app(MockBackend(), normalize=False).test_client()
+class FakeCorrector:
+    def correct_segments(self, segments):
+        return [
+            "Welcome everyone to the Q3 planning call."
+            if text.startswith("So welcome")
+            else text
+            for text in segments
+        ]
 
-    def post(self, data, name="a.wav", **kw):
-        return self.c.post("/transcribe", data={"file": (io.BytesIO(data), name)},
-                           content_type="multipart/form-data", **kw)
+
+class FailingCorrector:
+    def correct_segments(self, segments):
+        raise RuntimeError("provider unavailable")
+
+
+class ServiceTests(unittest.TestCase):
+    def make_client(self, corrector=None):
+        return TestClient(create_app(MockBackend(), normalize=False, corrector=corrector))
+
+    @staticmethod
+    def post(client, data, name="a.wav", **form_data):
+        return client.post(
+            "/transcribe",
+            files={"file": (name, data, "audio/wav")},
+            data=form_data,
+        )
+
+    def setUp(self):
+        self.client = self.make_client()
 
     def test_health(self):
-        self.assertEqual(self.c.get("/health").json["status"], "ok")
+        result = self.client.get("/health").json()
+        self.assertEqual(result["status"], "ok")
+        self.assertFalse(result["text_correction_available"])
+        self.assertEqual(result["asr_mode"], "mock")
 
     def test_wav_upload_json(self):
-        r = self.post(wav_bytes(), "meeting.wav")
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json["source"], "meeting.wav")
-        self.assertIn("action_items", r.json["enrichment"])
+        response = self.post(self.client, wav_bytes(), "meeting.wav")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["source"], "meeting.wav")
+        self.assertIn("action_items", response.json()["enrichment"])
 
     def test_srt_format(self):
-        r = self.post(wav_bytes(), query_string={"format": "srt"})
-        self.assertTrue(r.get_data(as_text=True).startswith("1\n00:00:00,000"))
+        response = self.post(self.client, wav_bytes(), **{"format": "srt"})
+        self.assertTrue(response.text.startswith("1\n00:00:00,000 --> 00:00:04,200"))
 
     def test_missing_file(self):
-        self.assertEqual(self.c.post("/transcribe").status_code, 400)
+        self.assertEqual(self.client.post("/transcribe").status_code, 422)
 
     def test_unsupported_type(self):
-        self.assertEqual(self.post(b"hello", "notes.txt").status_code, 415)
+        response = self.post(self.client, b"hello", "notes.txt")
+        self.assertEqual(response.status_code, 415)
 
     def test_empty_file(self):
-        self.assertEqual(self.post(b"", "a.mp3").status_code, 422)
+        response = self.post(self.client, b"", "a.mp3")
+        self.assertEqual(response.status_code, 422)
 
     def test_bad_format_param(self):
-        self.assertEqual(self.post(wav_bytes(), query_string={"format": "xml"}).status_code, 400)
+        response = self.post(self.client, wav_bytes(), **{"format": "xml"})
+        self.assertEqual(response.status_code, 400)
+
+    def test_correction_is_opt_in_and_preserves_original(self):
+        client = self.make_client(FakeCorrector())
+        response = self.post(client, wav_bytes(), correct="true")
+
+        self.assertEqual(response.status_code, 200)
+        transcript = response.json()
+        self.assertTrue(transcript["correction_applied"])
+        self.assertTrue(transcript["raw_text"].startswith("So welcome"))
+        self.assertTrue(transcript["text"].startswith("Welcome"))
+        self.assertEqual(transcript["segments"][0]["start"], 0.0)
+
+    def test_correction_failure_keeps_local_transcript(self):
+        client = self.make_client(FailingCorrector())
+        response = self.post(client, wav_bytes(), correct="true")
+
+        self.assertEqual(response.status_code, 200)
+        transcript = response.json()
+        self.assertFalse(transcript["correction_applied"])
+        self.assertIsNone(transcript["raw_text"])
+        self.assertTrue(transcript["text"].startswith("So welcome"))
+        self.assertTrue(any("original transcript kept" in item for item in transcript["warnings"]))
+
+    def test_correction_requires_configured_provider(self):
+        response = self.post(self.client, wav_bytes(), correct="true")
+        self.assertEqual(response.status_code, 503)
 
 
 if __name__ == "__main__":
