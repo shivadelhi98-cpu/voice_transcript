@@ -103,6 +103,14 @@ a private or gated Hugging Face model, create a read-only token and set
 `HF_TOKEN` in `.env`; `huggingface_hub` reads this standard environment
 variable. Never put either token in Python source, Streamlit settings, or Git.
 
+## Supported audio files
+
+The UI accepts WAV, MP3, M4A, FLAC, OGG, OGA, Opus, WEBM, and MP4 files.
+OGG/Opus-family files (`.ogg`, `.oga`, and `.opus`, including uppercase file
+extensions) are converted by FFmpeg to mono 16 kHz WAV before local
+transcription. Install FFmpeg and ensure `ffmpeg -version` works in the terminal
+running FastAPI.
+
 ## Run and test
 
 ```powershell

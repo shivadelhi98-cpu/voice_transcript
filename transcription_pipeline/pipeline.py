@@ -24,7 +24,7 @@ load_settings()
 
 log = logging.getLogger("pipeline")
 
-SUPPORTED_EXT = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm", ".mp4"}
+SUPPORTED_EXT = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".oga", ".opus", ".webm", ".mp4"}
 MAX_BYTES = 500 * 1024 * 1024
 
 

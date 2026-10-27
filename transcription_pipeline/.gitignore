@@ -10,5 +10,7 @@ out/
 *.m4a
 *.flac
 *.ogg
+*.oga
+*.opus
 *.webm
 *.mp4

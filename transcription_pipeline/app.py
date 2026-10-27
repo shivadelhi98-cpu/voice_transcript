@@ -53,7 +53,7 @@ except requests.RequestException as error:
 
 uploaded_audio = st.file_uploader(
     "Choose an audio file",
-    type=["wav", "mp3", "m4a", "flac", "ogg", "webm", "mp4"],
+    type=["wav", "mp3", "m4a", "flac", "ogg", "oga", "opus", "webm", "mp4"],
 )
 
 correction_available = health.get("text_correction_available", False)

@@ -1,7 +1,11 @@
 import io
+import shutil
 import struct
+import subprocess
+import tempfile
 import unittest
 import wave
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -39,10 +43,10 @@ class ServiceTests(unittest.TestCase):
         return TestClient(create_app(MockBackend(), normalize=False, corrector=corrector))
 
     @staticmethod
-    def post(client, data, name="a.wav", **form_data):
+    def post(client, data, name="a.wav", content_type="audio/wav", **form_data):
         return client.post(
             "/transcribe",
-            files={"file": (name, data, "audio/wav")},
+            files={"file": (name, data, content_type)},
             data=form_data,
         )
 
@@ -69,6 +73,34 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["source"], "meeting.wav")
         self.assertIn("action_items", response.json()["enrichment"])
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg is required for Ogg integration tests")
+    def test_ogg_family_uploads_are_normalized_and_transcribed(self):
+        client = TestClient(create_app(MockBackend(), normalize=True))
+        with tempfile.TemporaryDirectory() as directory:
+            for suffix, codec in ((".OGG", "libopus"), (".opus", "libopus"), (".oga", "libvorbis")):
+                with self.subTest(suffix=suffix):
+                    audio_path = Path(directory) / f"meeting{suffix}"
+                    subprocess.run(
+                        [
+                            "ffmpeg", "-y", "-loglevel", "error",
+                            "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono",
+                            "-t", "0.5", "-c:a", codec, "-f", "ogg", str(audio_path),
+                        ],
+                        check=True,
+                        capture_output=True,
+                    )
+
+                    response = self.post(
+                        client,
+                        audio_path.read_bytes(),
+                        audio_path.name,
+                        content_type="audio/ogg",
+                    )
+
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertEqual(response.json()["source"], audio_path.name)
+                    self.assertTrue(response.json()["segments"])
 
     def test_srt_format(self):
         response = self.post(self.client, wav_bytes(), **{"format": "srt"})
